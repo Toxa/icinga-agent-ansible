@@ -1,0 +1,74 @@
+---
+- name: RHEL based OS specific task
+  block:
+    - name: Update certificates to prevent failed fetch
+      package:
+        name: ca-certificates
+        state: latest
+  
+    - block:
+       - name: Import icinga-freedom gpg key
+         rpm_key:
+           state: present
+           key: https://packages.freedom-for-icinga.com/free-icinga.key
+ 
+ 
+       - name: Add icinga freedom-repo
+         get_url:
+           url: https://packages.freedom-for-icinga.com/epel/FREE-ICINGA-release.repo
+           dest: /etc/yum.repos.d/
+           mode: '644'
+ 
+      when: ansible_distribution_major_version |int > 7
+ 
+    - block:
+       - name: Import icinga gpg key
+         rpm_key:
+           state: present
+           key: https://packages.icinga.com/icinga.key
+ 
+       - name: Add icinga repo
+         get_url:
+           url: https://packages.icinga.com/centos/ICINGA-release.repo
+           dest: /etc/yum.repos.d/
+           mode: '644'
+ 
+      when: ansible_distribution_major_version |int <= 7
+ 
+    - block:
+        - name: Import linuxfabik gpg key
+          rpm_key:
+            state: present
+            key: https://repo.linuxfabrik.ch/linuxfabrik.key
+ 
+        - name: Add linuxfabrik repo
+          get_url:
+            url: https://repo.linuxfabrik.ch/monitoring-plugins/rhel/linuxfabrik-monitoring-plugins-release.repo
+            dest: /etc/yum.repos.d/
+            mode: '644'
+ 
+        - name: Install linuxfabrik plugins
+          package:
+            name: linuxfabrik-monitoring-plugins
+            state: present
+ 
+      when: ansible_distribution_major_version |int > 6  
+    - name: Install epel-repo package
+      package:
+        name: epel-release
+        state: present
+
+    - name: Install icinga2 package
+      package:
+        name: icinga2
+        state: present
+
+    - name: Install Nagios plugins for old distributive
+      package:
+        name: nagios-plugins-all
+        state: present
+      when: ansible_distribution_major_version == "6"
+
+  become: true
+
+

@@ -1,0 +1,80 @@
+---
+- name: Distr
+  debug:
+    msg: System {{ ansible_distribution }}
+
+- name: Ubuntu specific task
+  block:
+    - name: Print the gateway for each host when defined
+      ansible.builtin.debug:
+        msg: System {{ inventory_hostname }} has gateway {{ ansible_default_ipv4.gateway }}
+      when: ansible_default_ipv4.gateway is defined
+
+    - name: Update certificates to prevent failed fetch
+      apt:
+        name: ca-certificates
+        state: latest
+        force: yes
+
+    - name: Run ca-update
+      command: update-ca-certificates
+
+    - name: Fetch icinga2 gpg key
+      get_url:
+        url: https://packages.icinga.com/icinga.key
+        dest: /etc/apt/trusted.gpg.d/icinga.asc
+
+    - name: Add apt repository for icinga2
+      apt_repository:
+        repo: "deb [signed-by=/etc/apt/trusted.gpg.d/icinga.asc] https://packages.icinga.com/ubuntu icinga-{{ ansible_distribution_release }} main"
+        state: present
+
+          #    - name: Add apt src repository for icinga2
+          #      apt_repository:
+          #        repo: "deb-src [signed-by=/etc/apt/trusted.gpg.d/icinga.asc] https://packages.icinga.com/ubuntu icinga-{{ ansible_distribution_release }} main"
+          #        state: present
+    - name: Install icinga2
+      apt:
+        name: icinga2
+        state: present
+        force: yes 
+
+    - block:
+      - name: Fetch linuxfabrik gpg key
+        get_url:
+          url: https://repo.linuxfabrik.ch/linuxfabrik.key
+          dest: /etc/apt/trusted.gpg.d/linuxfabrik.asc
+
+      - name: Add linuxfabrik plugin repository
+        apt_repository:
+          repo: "deb [signed-by=/etc/apt/trusted.gpg.d/linuxfabrik.asc] https://repo.linuxfabrik.ch/monitoring-plugins/ubuntu/ {{ ansible_distribution_release }}-release main"
+          state: present
+
+      - name: Install linuxfabrik plugins
+        apt:
+          name: linuxfabrik-monitoring-plugins
+          state: present
+          force: yes
+
+      when: ansible_distribution_major_version | int > 16
+
+    - name: Download and unpack linuxfabrik-monitoring-plugins as archive
+      unarchive:
+        src: https://download.linuxfabrik.ch/monitoring-plugins/tar/linuxfabrik-monitoring-plugins.tar
+        dest: /
+        remote_src: yes
+        creates: /usr/lib64/nagios/plugins
+      when: ansible_distribution_major_version | int <= 16
+
+    - name: Change owner for plugin dir
+      file:
+        path: /usr/lib64/nagios/plugins
+        owner: nagios
+        group: nagios
+      when: ansible_distribution_major_version | int <= 16
+
+
+
+  when: 
+    - ansible_distribution == 'Ubuntu'
+    - ansible_distribution_major_version | int > 15

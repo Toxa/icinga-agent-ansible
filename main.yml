@@ -1,0 +1,153 @@
+---
+- name: Install and run icinga agent
+  # become: false
+  hosts: agents
+  gather_facts: no
+  environment:
+    TMPDIR: "{{ ansible_env.HOME }}"
+  tasks:
+    - name: Try get credentials from vault
+      block:
+        - name: "Get become Password"
+          community.hashi_vault.vault_kv2_get:
+            url: "https://vault.example.com:8200"
+            engine_mount_point: "infra"
+            path: "servers/{{ inventory_hostname }}/ssh"
+          register: password
+          delegate_to: localhost
+
+        - name: Set username and password
+          set_fact:
+            ansible_become_password: "{{ password.secret.sysadm }}"
+            ansible_user: sysadm
+      rescue:
+        - name: We are root
+          set_fact:
+            ansible_user: root
+      always:
+        - name: Gather facts
+          setup:
+
+    - name: Before start we check access to port 5665 on icinga
+      wait_for:
+        host: icinga.example.com
+        port: 5665
+        timeout: 2
+      register: icinga_port
+
+    - name: Icinga server not accessible from this host
+      fail:
+        msg: Port 5665 on icinga.example.com not accessible from {{ inventory_hostname }} . Please check ipset list ICINGA_AGENT on router
+      when: icinga_port.failed == true
+
+    - name: Include os specific tasks
+      include_tasks: "{{ ansible_os_family }}.yml"
+
+    - name: Create sudoers.d/icinga file
+      template:
+        src: templates/{{ ansible_os_family }}.sudoers.j2
+        dest: /etc/sudoers.d/icinga
+        owner: root
+        group: root
+        mode: '440'
+        validate: /usr/sbin/visudo -cf %s
+      become: yes
+
+    - name: Check host not exists on icinga 
+      uri:
+       force_basic_auth: true
+       user: admin
+       password: "password"
+       url: "https://icinga.example.com/director/host?name={{ inventory_hostname }}"
+       status_code:
+         - 200
+         - 404
+       headers:
+         Accept: application/json
+      register: icinga_host
+      delegate_to: localhost
+
+    - debug:
+        var: icinga_host.status        
+
+    - name: Create var for tags
+      set_fact:
+        tag_os_name: ubuntu
+      when: ansible_distribution == 'Ubuntu'
+
+    - name: Create var for tags
+      set_fact:
+        tag_os_name: rhel
+      when: ansible_os_family == 'RedHat'
+
+    - name: Create host on icinga
+      uri:
+       force_basic_auth: true
+       user: admin
+       password: "password"
+       body_format: json
+       method: "POST"
+       status_code:
+         - 200
+         - 201
+       url: "https://icinga.example.com/director/host"
+       body: 
+          object_name: "{{ inventory_hostname }}"
+          object_type: object
+          address: "{{ inventory_hostname }}"
+          imports:
+            - "tpl-host-linux"
+          vars:
+            tags:
+              - "{{ tag_os_name }}{{ ansible_distribution_major_version }}"
+       headers:
+         Accept: application/json
+      register: registred_host
+      when: icinga_host.status == 404
+      delegate_to: localhost
+
+    - debug:
+        var: registred_host 
+
+    - name: Get host ticket
+      uri:
+        force_basic_auth: true
+        user: admin
+        password: "password"
+        url: "https://icinga.example.com/director/host/ticket?name={{ inventory_hostname }}"
+        headers:
+          Accept: application/json
+      register: ticket
+      delegate_to: localhost
+
+    - name: Create dir for script
+      file:
+        state: directory
+        path: /opt/ansible
+        owner: "{{ ansible_user }}"
+      become: yes
+
+    - name: Generate register agent script
+      template:
+        src: templates/agent_register.sh.j2
+        dest: "/opt/ansible/agent_register.sh"
+        mode: 740
+
+    - name: Run register agent script
+      shell: 
+        cmd: "/opt/ansible/agent_register.sh"
+        creates: "/var/lib/icinga2/certs/{{ inventory_hostname }}.crt"
+      become: yes
+
+    - name: Remove register agent script
+      file:
+        path: "/opt/ansible"
+        state: absent
+      become: yes
+
+    - name: Enable and run icinga2 service
+      systemd:
+        name: icinga2
+        state: restarted
+        enabled: true
+      become: yes
